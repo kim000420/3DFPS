@@ -159,6 +159,13 @@ namespace Akila.FPSFramework
             if (hit.transform.TryGetComponent(out IgnoreHitDetection ignore)) return;
             OnHit(hit);
 
+            // === DestructibleWall 절단 처리 추가 ===
+            if (hit.transform.TryGetComponent(out DestructibleWall wall))
+            {
+                // 총알 대미지와 발사자 정보 전달
+                wall.DamageAt(hit.point, damage, source != null ? source.Actor : null);
+            }
+
             if (explosive)
             {
                 explosive.Explode(true);
