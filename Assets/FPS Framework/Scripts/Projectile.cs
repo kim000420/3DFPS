@@ -155,17 +155,33 @@ namespace Akila.FPSFramework
 
         private void UpdateHits(Ray ray, RaycastHit hit)
         {
-            //stop if object has ignore component
+            // 0) 무시 컴포넌트면 즉시 종료
             if (hit.transform.TryGetComponent(out IgnoreHitDetection ignore)) return;
-            OnHit(hit);
 
-            // === DestructibleWall 절단 처리 추가 ===
-            if (hit.transform.TryGetComponent(out DestructibleWall wall))
+            // 1) 먼저 DestructibleWall 처리 (자식 콜라이더 대비: InParent)
+            var wall = hit.collider.GetComponentInParent<DestructibleWall>();
+            if (wall != null)
             {
-                // 총알 대미지와 발사자 정보 전달
+                // 총알 대미지와 발사자 전달 (Actor null 허용)
                 wall.DamageAt(hit.point, damage, source != null ? source.Actor : null);
+
+                // 벽은 얇은 판 구조라 데칼을 굳이 찍지 않는 편이 자연스러움 → OnHit 생략/지연
+                // 관통 강도는 벽 재질에 맞춰 더 크게 깎는 편이 안정적
+                penetrationStrenght -= 15f; // 필요시 튜닝 (기존 10보다 조금 더)
+
+                // 관통 가능하면 다음 히트 테스트로 진행
+                if (penetrationStrenght > 0)
+                {
+                    Firearm.UpdateHits(source, this, defaultDecal, ray, hit, damage, damageRangeFactor, decalDirection);
+                }
+                else
+                {
+                    Destroy(gameObject);
+                }
+                return; // 여기서 마무리 (벽 이외 로직 중복 실행 방지)
             }
 
+            // 2) 폭발탄이면 즉시 처리 (절단이 없을 때만)
             if (explosive)
             {
                 explosive.Explode(true);
@@ -173,21 +189,20 @@ namespace Akila.FPSFramework
                 return;
             }
 
+            // 3) 일반 표면: 이제 데칼/관통 처리
+            OnHit(hit);
+
             if (hit.transform.TryGetComponent(out CustomDecal customDecal))
-            {
                 penetrationStrenght -= customDecal.materialStrenght;
-            }
             else
-            {
-                penetrationStrenght -= 10;
-            }
+                penetrationStrenght -= 10f;
 
             if (penetrationStrenght > 0)
                 Firearm.UpdateHits(source, this, defaultDecal, ray, hit, damage, damageRangeFactor, decalDirection);
             else
                 Destroy(gameObject);
-
         }
+
 
         public virtual void OnHit(RaycastHit hit)
         {

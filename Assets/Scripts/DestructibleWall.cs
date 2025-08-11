@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 using Akila.FPSFramework;
 
@@ -6,23 +6,26 @@ using Akila.FPSFramework;
 public class DestructibleWall : MonoBehaviour, IDamageable
 {
     [Header("Destruction Settings")]
-    public float baseDestructionRadius = 0.5f; // ���� �ݰ�
+    public float baseDestructionRadius = 0.5f; // 기준 반경
     public float health = 100f;
 
     private MeshFilter meshFilter;
     private MeshCollider meshCollider;
-    private Mesh currentMesh; // ���� ������ ���� �޽�
+    private Mesh currentMesh; // 수정 가능한 현재 메시
 
     public float MaxHealth { get; set; }
     public Vector3 deathForce { get; set; }
     public bool deadConfirmed { get; set; }
+
+    [SerializeField] private float patternQuantize = 1e-3f; // XY 패턴 라운딩 단위(메시 크기에 맞게 튜닝)
+    [SerializeField] private float radiusEpsilon = 1e-4f;   // 반경 여유(부동소수 오차 보정)
 
     private void Awake()
     {
         meshFilter = GetComponent<MeshFilter>();
         meshCollider = GetComponent<MeshCollider>();
 
-        // �޽� ���� (���� �ǵ帮�� �ʱ�)
+        // 메시 복사 (원본 건드리지 않기)
         currentMesh = Instantiate(meshFilter.mesh);
         meshFilter.mesh = currentMesh;
         meshCollider.sharedMesh = currentMesh;
@@ -31,81 +34,254 @@ public class DestructibleWall : MonoBehaviour, IDamageable
     }
 
     /// <summary>
-    /// Damage ȣ�� �� hitPoint�� �Բ� ����
+    /// Damage 호출 시 hitPoint와 함께 실행
     /// </summary>
     public void Damage(float amount, Actor damageSource)
     {
-        Debug.LogWarning("[DestructibleWall] Damage() ȣ��� - hitPoint ����");
+        Debug.LogWarning("[DestructibleWall] Damage() 호출됨 - hitPoint 없음");
     }
 
     /// <summary>
-    /// ���� Ÿ�� ��ġ�� �Բ� ������ ����
+    /// 실제 타격 위치와 함께 데미지 전달
     /// </summary>
     public void DamageAt(Vector3 hitPoint, float amount, Actor damageSource)
     {
-        // ü�� ����
+        // 체력 차감
         health -= amount;
 
-        // ����� ũ�⿡ ���� �ݰ� ����
+        // 대미지 크기에 따라 반경 조절
         float radius = baseDestructionRadius * Mathf.Clamp01(amount / MaxHealth);
 
         Debug.Log($"[DestructibleWall] Hit at {hitPoint}, Damage: {amount}, Radius: {radius}");
 
-        // ���� ����
+        // 절단 실행
         TryClipMeshAt(hitPoint, radius);
 
-        // ���� �ı� ���� Ȯ��
+        // 완전 파괴 여부 확인
         if (health <= 0f && !deadConfirmed)
         {
             deadConfirmed = true;
-            Debug.Log("[DestructibleWall] ���� �ı���");
-            // ���� �ı� �� �ļ� ó�� ����
+            Debug.Log("[DestructibleWall] 완전 파괴됨");
+            // 완전 파괴 시 후속 처리 가능
         }
     }
     private void TryClipMeshAt(Vector3 hitWorldPos, float radius)
     {
+        // 0) 좌표/축 준비
         Vector3 hitLocalPos = transform.InverseTransformPoint(hitWorldPos);
 
-        Vector3[] vertices = currentMesh.vertices;
-        int[] triangles = currentMesh.triangles;
+        int thicknessAxis = GetThicknessAxis(out Vector3 thicknessDir); // ex) Z가 두께면 thicknessDir=(0,0,1)
+        Vector2 hit2 = ProjectTo2D(hitLocalPos, thicknessAxis);
 
-        List<int> newTriangles = new List<int>();
+        var v = currentMesh.vertices;
+        var t = currentMesh.triangles;
+        int triCount = t.Length / 3;
+
+        // 1) 앞면 패턴 수집: (노멀 · 두께축) > 0 인 면들 중 "반경 안" 삼각형의 2D-센트로이드 키
+        HashSet<long> frontPattern = new HashSet<long>();
+
+        for (int tri = 0; tri < triCount; tri++)
+        {
+            int ia = t[tri * 3 + 0], ib = t[tri * 3 + 1], ic = t[tri * 3 + 2];
+            Vector3 v0 = v[ia], v1 = v[ib], v2 = v[ic];
+
+            // 로컬 노멀
+            Vector3 n = Vector3.Cross(v1 - v0, v2 - v0).normalized;
+            bool isFront = Vector3.Dot(n, thicknessDir) > 0f; // 두께축 기준 "앞"
+
+            // 2D 센트로이드
+            Vector3 c3 = (v0 + v1 + v2) / 3f;
+            Vector2 c2 = ProjectTo2D(c3, thicknessAxis);
+
+            if (isFront && Vector2.Distance(c2, hit2) <= radius + radiusEpsilon)
+            {
+                frontPattern.Add(Key2D(c2));
+            }
+        }
+
+        // 2) 일괄 제거: 앞면 패턴과 일치하는 2D-센트로이드 키는 "노멀과 무관하게" 삭제
+        //    (즉, 뒷면도 동일 키면 함께 삭제) + 반경 자체로 걸린 면도 삭제
+        List<int> kept = new List<int>(t.Length);
         int removed = 0;
 
-        for (int i = 0; i < triangles.Length; i += 3)
+        for (int tri = 0; tri < triCount; tri++)
         {
-            Vector3 v0 = vertices[triangles[i]];
-            Vector3 v1 = vertices[triangles[i + 1]];
-            Vector3 v2 = vertices[triangles[i + 2]];
+            int ia = t[tri * 3 + 0], ib = t[tri * 3 + 1], ic = t[tri * 3 + 2];
+            Vector3 v0 = v[ia], v1 = v[ib], v2 = v[ic];
+            Vector3 c3 = (v0 + v1 + v2) / 3f;
+            Vector2 c2 = ProjectTo2D(c3, thicknessAxis);
 
-            Vector3 center = (v0 + v1 + v2) / 3f;
+            bool inRadius = Vector2.Distance(c2, hit2) <= radius + radiusEpsilon;
+            bool matchFrontKey = frontPattern.Contains(Key2D(c2));
 
-            // �β� ����(Z) �����ϰ� XY �Ÿ��� ���
-            Vector2 center2D = new Vector2(center.x, center.y);
-            Vector2 hit2D = new Vector2(hitLocalPos.x, hitLocalPos.y);
-
-            if (Vector2.Distance(center2D, hit2D) <= radius)
+            if (matchFrontKey || inRadius)
             {
                 removed++;
                 continue;
             }
 
-            newTriangles.Add(triangles[i]);
-            newTriangles.Add(triangles[i + 1]);
-            newTriangles.Add(triangles[i + 2]);
+            kept.Add(ia); kept.Add(ib); kept.Add(ic);
         }
 
-        Debug.Log($"[DestructibleWall] Removed triangles: {removed}, Remaining: {newTriangles.Count / 3}");
-
-        currentMesh.triangles = newTriangles.ToArray();
+        currentMesh.triangles = kept.ToArray();
         currentMesh.RecalculateNormals();
         currentMesh.RecalculateBounds();
 
-        meshCollider.sharedMesh = null;
+        meshCollider.sharedMesh = null; // 콜라이더 갱신
         meshCollider.sharedMesh = currentMesh;
+
+        Debug.Log($"[DestructibleWall] axis={thicknessAxis}, Removed(front-sync): {removed}, Remain: {kept.Count / 3}");
+
+        // 3) (선택) 고립 파편 정리 — 큰 구멍 만들수록 효과적
+        RemoveFloatingIslands2D(thicknessAxis);
+    }
+    private void RemoveFloatingIslands2D(int thicknessAxis)
+    {
+        var verts = currentMesh.vertices;
+        var tris = currentMesh.triangles;
+        int triCount = tris.Length / 3;
+        if (triCount == 0) return;
+
+        // 인접 리스트 (공유 버텍스 기준)
+        List<int>[] adj = new List<int>[triCount];
+        for (int i = 0; i < triCount; i++) adj[i] = new List<int>();
+        Dictionary<int, List<int>> vertToTris = new Dictionary<int, List<int>>();
+        for (int i = 0; i < triCount; i++)
+        {
+            int ia = tris[i * 3 + 0], ib = tris[i * 3 + 1], ic = tris[i * 3 + 2];
+            if (!vertToTris.ContainsKey(ia)) vertToTris[ia] = new List<int>();
+            if (!vertToTris.ContainsKey(ib)) vertToTris[ib] = new List<int>();
+            if (!vertToTris.ContainsKey(ic)) vertToTris[ic] = new List<int>();
+            vertToTris[ia].Add(i); vertToTris[ib].Add(i); vertToTris[ic].Add(i);
+        }
+        foreach (var kv in vertToTris)
+        {
+            var L = kv.Value;
+            for (int i = 0; i < L.Count; i++)
+                for (int j = i + 1; j < L.Count; j++)
+                {
+                    int t0 = L[i], t1 = L[j];
+                    adj[t0].Add(t1); adj[t1].Add(t0);
+                }
+        }
+
+        // 외곽 접속성 판정: 2D 바운즈 변두리와 맞닿은 삼각형에서 BFS
+        currentMesh.RecalculateBounds();
+        var bounds = currentMesh.bounds;
+
+        // 두께축 제외한 투영 바운즈 extents
+        float ex, ey, cx, cy;
+        if (thicknessAxis == 0)
+        {
+            ex = bounds.extents.y; ey = bounds.extents.z;
+            cx = bounds.center.y; cy = bounds.center.z;
+        }
+        else if (thicknessAxis == 1)
+        {
+            ex = bounds.extents.x; ey = bounds.extents.z;
+            cx = bounds.center.x; cy = bounds.center.z;
+        }
+        else
+        {
+            ex = bounds.extents.x; ey = bounds.extents.y;
+            cx = bounds.center.x; cy = bounds.center.y;
+        }
+
+        float mx = ex * 0.999f, my = ey * 0.999f;
+        bool[] visited = new bool[triCount];
+        System.Collections.Generic.Queue<int> q = new System.Collections.Generic.Queue<int>();
+
+        for (int i = 0; i < triCount; i++)
+        {
+            int ia = tris[i * 3 + 0], ib = tris[i * 3 + 1], ic = tris[i * 3 + 2];
+            Vector2 a2 = ProjectTo2D(verts[ia], thicknessAxis);
+            Vector2 b2 = ProjectTo2D(verts[ib], thicknessAxis);
+            Vector2 c2 = ProjectTo2D(verts[ic], thicknessAxis);
+
+            bool nearEdge =
+                Mathf.Abs(a2.x - cx) >= mx || Mathf.Abs(a2.y - cy) >= my ||
+                Mathf.Abs(b2.x - cx) >= mx || Mathf.Abs(b2.y - cy) >= my ||
+                Mathf.Abs(c2.x - cx) >= mx || Mathf.Abs(c2.y - cy) >= my;
+
+            if (nearEdge && !visited[i])
+            {
+                visited[i] = true; q.Enqueue(i);
+                while (q.Count > 0)
+                {
+                    int cur = q.Dequeue();
+                    foreach (var nx in adj[cur])
+                        if (!visited[nx]) { visited[nx] = true; q.Enqueue(nx); }
+                }
+            }
+        }
+
+        // 미방문(외곽과 연결 안된 섬) 제거
+        List<int> kept = new List<int>(tris.Length);
+        int removed = 0;
+        for (int i = 0; i < triCount; i++)
+        {
+            if (visited[i])
+            {
+                kept.Add(tris[i * 3 + 0]);
+                kept.Add(tris[i * 3 + 1]);
+                kept.Add(tris[i * 3 + 2]);
+            }
+            else removed++;
+        }
+        if (removed > 0)
+        {
+            currentMesh.triangles = kept.ToArray();
+            currentMesh.RecalculateNormals();
+            currentMesh.RecalculateBounds();
+            meshCollider.sharedMesh = null;
+            meshCollider.sharedMesh = currentMesh;
+            Debug.Log($"[DestructibleWall] Floating islands removed: {removed}");
+        }
     }
 
-    // IDamageable �ʼ� ����
+    private static void ShareVertex(Dictionary<int, List<int>> map, int vIdx, int triIdx)
+    {
+        if (!map.TryGetValue(vIdx, out var list))
+        {
+            list = new List<int>();
+            map[vIdx] = list;
+        }
+        list.Add(triIdx);
+    }
+
+    private int GetThicknessAxis(out Vector3 axisDir)
+    {
+        currentMesh.RecalculateBounds();
+        var e = currentMesh.bounds.extents;
+        // 가장 작은 extents가 "두께"라고 가정
+        if (e.x <= e.y && e.x <= e.z) { axisDir = Vector3.right; return 0; } // X가 두께
+        if (e.y <= e.x && e.y <= e.z) { axisDir = Vector3.up; return 1; } // Y가 두께
+        axisDir = Vector3.forward; return 2; // Z가 두께
+    }
+
+    // 유틸: 두께축을 제외한 2개 축으로 2D 투영 좌표를 만든다
+    private Vector2 ProjectTo2D(Vector3 p, int thicknessAxis)
+    {
+        switch (thicknessAxis)
+        {
+            case 0: // X가 두께 => (Y,Z) 투영
+                return new Vector2(p.y, p.z);
+            case 1: // Y가 두께 => (X,Z) 투영
+                return new Vector2(p.x, p.z);
+            default: // Z가 두께 => (X,Y) 투영
+                return new Vector2(p.x, p.y);
+        }
+    }
+
+    // 유틸: 2D 좌표 라운딩 키(앞/뒤 삼각형 매칭용)
+    private long Key2D(Vector2 p)
+    {
+        long kx = Mathf.RoundToInt(p.x / patternQuantize);
+        long ky = Mathf.RoundToInt(p.y / patternQuantize);
+        return (kx << 32) ^ (ky & 0xffffffff);
+    }
+
+    // IDamageable 필수 구현
     public Actor GetActor() => null;
     public float GetHealth() => health;
     public bool IsDead() => health <= 0f;
