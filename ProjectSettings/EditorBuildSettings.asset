@@ -5,13 +5,13 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 0
+  - enabled: 1
     path: Assets/FPS Framework/Scenes/Menu.unity
     guid: ac101b9ed944cf947b30259ece7eb5aa
-  - enabled: 0
+  - enabled: 1
     path: Assets/FPS Framework/Scenes/Loading.unity
     guid: 75e5571c0de96ac4a84aadc041f9d80e
-  - enabled: 0
+  - enabled: 1
     path: Assets/FPS Framework/Scenes/Demo.unity
     guid: c604dab8d2dc4c845b0a15de6b5edc02
   - enabled: 1

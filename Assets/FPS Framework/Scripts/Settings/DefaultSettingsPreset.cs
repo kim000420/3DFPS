@@ -63,7 +63,19 @@ namespace Akila.FPSFramework.Examples
         {
             data.displayResolution = value;
             List<Resolution> resolutions = FPSFrameworkUtility.GetResolutions().ToList();
+            
+            // 리스트가 비었으면 현재 해상도를 기본으로 추가
+            if (resolutions == null || resolutions.Count == 0)
+            {
+                resolutions = new List<Resolution> { Screen.currentResolution };
+            }
 
+            // 인덱스 범위 체크
+            if (value < 0 || value >= resolutions.Count)
+            {
+                Debug.LogWarning($"[Settings] 잘못된 해상도 인덱스: {value}, 기본값 0 사용");
+                value = 0;
+            }
             Resolution resolution = resolutions[value];
             Screen.SetResolution(resolution.width, resolution.height, Screen.fullScreen);
         }
