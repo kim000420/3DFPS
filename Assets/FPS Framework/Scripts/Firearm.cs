@@ -591,6 +591,17 @@ namespace Akila.FPSFramework
             //stop if object has ignore component
             if (hit.transform.TryGetComponent(out IgnoreHitDetection ignore)) return;
 
+            // DestructibleWall 특수 처리: 데칼 생략 + 벽 파괴만 수행
+            var wall = hit.collider.GetComponentInParent<DestructibleWall>();
+            if (wall != null)
+            {
+                // 무기 데미지로 반경 스케일은 DestructibleWall.DamageAt 내부 계산 사용
+                float dmg = damage * damageRangeFactor * (firearm ? firearm.attachmentsManager.damage : 1f);
+                wall.DamageAt(hit.point, dmg, firearm ? firearm.Actor : null);
+                // 데칼/기타 기본 경로는 생략
+                return;
+            }
+
             //setup hit info for hit detection without directly editing on the code but using IHitable interface
             HitInfo hitInfo = new HitInfo(projectile, ray, hit);
             GameObject currentDecal = defaultDecal;

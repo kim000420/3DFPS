@@ -138,6 +138,27 @@ namespace Akila.FPSFramework
 
             foreach (Collider collider in nearColliders)
             {
+                var wall = collider.GetComponentInParent<DestructibleWall>();
+                if (wall != null)
+                {
+                    // 1) 최근접점
+                    Vector3 closest = wall.GetClosestPointOnSurface(transform.position);
+
+                    // 2) 거리 보정 (가까울수록 1)
+                    float dist = Vector3.Distance(transform.position, closest);
+                    float t = Mathf.InverseLerp(radius * scale, 0f, dist);
+
+                    // 3) 절단 반경/강도 스케일 (간단 맵핑: 필요 시 커브 도입)
+                    float holeRadius = Mathf.Max(0.01f, (radius * 0.25f) * t); // 튜닝 포인트
+                    float dmg = damage * t;
+
+                    // 4) 직접 절단 (A안: 삼각형 제거 기반)
+                    wall.DamageAt(closest, dmg, source);
+
+                    // 이 폭발 항목은 처리 완료 → 다음 콜라이더
+                    continue;
+                }
+
                 var dir = -(transform.position - collider.transform.position);
 
                 switch (type)

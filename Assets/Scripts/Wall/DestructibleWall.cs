@@ -142,19 +142,35 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         int triCount = tris.Length / 3;
         if (triCount == 0) return;
 
-        // 인접 리스트 (공유 버텍스 기준)
+        // --- 인접 리스트 (공유 '변' 기준) ---
         List<int>[] adj = new List<int>[triCount];
         for (int i = 0; i < triCount; i++) adj[i] = new List<int>();
-        Dictionary<int, List<int>> vertToTris = new Dictionary<int, List<int>>();
+
+        var trisArr = currentMesh.triangles;
+        // 에지 키: (minIdx<<32) ^ maxIdx
+        Dictionary<long, List<int>> edgeToTris = new Dictionary<long, List<int>>();
+
+        long EdgeKey(int a, int b)
+        {
+            if (a > b) { int tmp = a; a = b; b = tmp; }
+            return ((long)a << 32) ^ (long)(uint)b;
+        }
+
         for (int i = 0; i < triCount; i++)
         {
-            int ia = tris[i * 3 + 0], ib = tris[i * 3 + 1], ic = tris[i * 3 + 2];
-            if (!vertToTris.ContainsKey(ia)) vertToTris[ia] = new List<int>();
-            if (!vertToTris.ContainsKey(ib)) vertToTris[ib] = new List<int>();
-            if (!vertToTris.ContainsKey(ic)) vertToTris[ic] = new List<int>();
-            vertToTris[ia].Add(i); vertToTris[ib].Add(i); vertToTris[ic].Add(i);
+            int ia = trisArr[i * 3 + 0], ib = trisArr[i * 3 + 1], ic = trisArr[i * 3 + 2];
+            long e0 = EdgeKey(ia, ib);
+            long e1 = EdgeKey(ib, ic);
+            long e2 = EdgeKey(ic, ia);
+
+            if (!edgeToTris.TryGetValue(e0, out var L0)) edgeToTris[e0] = L0 = new List<int>();
+            if (!edgeToTris.TryGetValue(e1, out var L1)) edgeToTris[e1] = L1 = new List<int>();
+            if (!edgeToTris.TryGetValue(e2, out var L2)) edgeToTris[e2] = L2 = new List<int>();
+            L0.Add(i); L1.Add(i); L2.Add(i);
         }
-        foreach (var kv in vertToTris)
+
+        // 같은 에지를 공유하는 삼각형끼리만 연결(두 점 공유)
+        foreach (var kv in edgeToTris)
         {
             var L = kv.Value;
             for (int i = 0; i < L.Count; i++)
@@ -280,6 +296,45 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         long ky = Mathf.RoundToInt(p.y / patternQuantize);
         return (kx << 32) ^ (ky & 0xffffffff);
     }
+
+    // 유틸
+    public Vector3 GetClosestPointOnSurface(Vector3 worldPos)
+    {
+        // 로컬 변환
+        Vector3 local = transform.InverseTransformPoint(worldPos);
+
+        // 두께축과 투영 축 판정
+        int axis = GetThicknessAxis(out _);
+        currentMesh.RecalculateBounds();
+        var b = currentMesh.bounds;
+
+        // 중심/절반폭, 투영축별로 클램프
+        float cx, cy, cz, ex, ey, ez;
+        cx = b.center.x; cy = b.center.y; cz = b.center.z;
+        ex = b.extents.x; ey = b.extents.y; ez = b.extents.z;
+
+        Vector3 clamped = local;
+        switch (axis)
+        {
+            case 0: // X가 두께 → (Y,Z)만 클램프, X는 중앙면
+                clamped.y = Mathf.Clamp(local.y, cy - ey, cy + ey);
+                clamped.z = Mathf.Clamp(local.z, cz - ez, cz + ez);
+                clamped.x = cx;
+                break;
+            case 1: // Y가 두께
+                clamped.x = Mathf.Clamp(local.x, cx - ex, cx + ex);
+                clamped.z = Mathf.Clamp(local.z, cz - ez, cz + ez);
+                clamped.y = cy;
+                break;
+            default: // Z가 두께
+                clamped.x = Mathf.Clamp(local.x, cx - ex, cx + ex);
+                clamped.y = Mathf.Clamp(local.y, cy - ey, cy + ey);
+                clamped.z = cz;
+                break;
+        }
+        return transform.TransformPoint(clamped);
+    }
+
 
     // IDamageable 필수 구현
     public Actor GetActor() => null;
