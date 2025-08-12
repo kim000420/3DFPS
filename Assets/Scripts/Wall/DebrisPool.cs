@@ -3,59 +3,81 @@ using UnityEngine;
 
 public class DebrisPool : MonoBehaviour
 {
-    [SerializeField] GameObject debrisPrefab;
-    [SerializeField] List<GameObject> debrisPrefabs = new List<GameObject>(); // ★ 추가: 여러 개
-    [SerializeField] int prewarm = 20;
-    readonly Queue<GameObject> pool = new Queue<GameObject>();
+    [Header("Fallback (둘 다 비었을 때 사용)")]
+    [SerializeField] GameObject defaultPrefab;
+
+    [Header("Small Pieces")]
+    [SerializeField] List<GameObject> smallPrefabs = new List<GameObject>();
+    [SerializeField] int smallPrewarm = 20;
+
+    [Header("Big Pieces")]
+    [SerializeField] List<GameObject> bigPrefabs = new List<GameObject>();
+    [SerializeField] int bigPrewarm = 10;
+
+    readonly Queue<GameObject> smallPool = new Queue<GameObject>();
+    readonly Queue<GameObject> bigPool = new Queue<GameObject>();
 
     void Awake()
     {
-        for (int i = 0; i < prewarm; i++)
+        for (int i = 0; i < smallPrewarm; i++)
         {
-            var go = Instantiate(ChoosePrefab(), transform);
+            var prefab = ChoosePrefab(smallPrefabs);
+            var go = Instantiate(prefab, transform); // ← 여기서만 Instantiate
             go.SetActive(false);
-            pool.Enqueue(go);
+            smallPool.Enqueue(go);
+        }
+
+        for (int i = 0; i < bigPrewarm; i++)
+        {
+            var prefab = ChoosePrefab(bigPrefabs);
+            var go = Instantiate(prefab, transform);
+            go.SetActive(false);
+            bigPool.Enqueue(go);
         }
     }
 
-    GameObject ChoosePrefab()
+    GameObject ChoosePrefab(List<GameObject> list)
     {
-        if (debrisPrefabs != null && debrisPrefabs.Count > 0)
-            return debrisPrefabs[Random.Range(0, debrisPrefabs.Count)];
-        return debrisPrefab;
+        if (list != null && list.Count > 0) return list[Random.Range(0, list.Count)];
+        return defaultPrefab;
     }
 
-    GameObject Pop()
+    GameObject Pop(Queue<GameObject> q, List<GameObject> list)
     {
-        if (pool.Count > 0) return pool.Dequeue();
-        var go = Instantiate(ChoosePrefab(), transform);
+        if (q.Count > 0) return q.Dequeue();
+        var prefab = ChoosePrefab(list);
+        var go = Instantiate(prefab, transform);
         go.SetActive(false);
         return go;
     }
 
-    void Push(GameObject go) { if (!go) return; go.SetActive(false); pool.Enqueue(go); }
+    void Push(Queue<GameObject> q, GameObject go)
+    {
+        if (!go) return;
+        go.SetActive(false);
+        q.Enqueue(go);
+    }
 
-    // 기존 기본 버스트
-    public void SpawnBurst(Vector3 pos, int count = 6) => SpawnBurst(pos, count, 2.5f);
+    public void SpawnSmall(Vector3 pos, int count, float force) => SpawnBurst(pos, count, force, smallPool, smallPrefabs);
+    public void SpawnBig(Vector3 pos, int count, float force) => SpawnBurst(pos, count, force, bigPool, bigPrefabs);
 
-    // 파라미터 확장 버전
-    public void SpawnBurst(Vector3 pos, int count, float explosionForce)
+    void SpawnBurst(Vector3 pos, int count, float force, Queue<GameObject> pool, List<GameObject> prefabs)
     {
         for (int i = 0; i < count; i++)
         {
-            var go = Pop();
+            var go = Pop(pool, prefabs);
             go.transform.position = pos + Random.insideUnitSphere * 0.2f;
             go.transform.rotation = Random.rotation;
             go.SetActive(true);
-            var rb = go.GetComponent<Rigidbody>();
-            if (rb) rb.AddExplosionForce(explosionForce, pos, 2f, 0.5f, ForceMode.Impulse);
-            StartCoroutine(ReturnAfter(go, 5f));
+            if (go.TryGetComponent<Rigidbody>(out var rb))
+                rb.AddExplosionForce(force, pos, 2f, 0.5f, ForceMode.Impulse);
+            StartCoroutine(ReturnAfter(go, 5f, pool));
         }
     }
 
-    System.Collections.IEnumerator ReturnAfter(GameObject go, float t)
+    System.Collections.IEnumerator ReturnAfter(GameObject go, float t, Queue<GameObject> pool)
     {
         yield return new WaitForSeconds(t);
-        Push(go);
+        Push(pool, go);
     }
 }

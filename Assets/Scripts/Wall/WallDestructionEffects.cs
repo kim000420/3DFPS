@@ -1,26 +1,5 @@
 using UnityEngine;
 
-[System.Serializable]
-public class DebrisRule
-{
-    public DestructionKind kind;
-    public int smallCount = 4;     // 작은 파편 개수
-    public int bigCount = 0;       // 큰 파편 개수 (원하면 별도 풀 분리 가능)
-    public float smallForce = 2.5f;
-    public float bigForce = 4.5f;
-    public float fxAreaThreshold = 0.3f; // FX 분기 임계치(옵션, Hit/Breach만 해당)
-}
-
-public class DebrisRuleset : MonoBehaviour
-{
-    public DebrisRule[] rules;
-    public DebrisRule Find(DestructionKind kind)
-    {
-        foreach (var r in rules) if (r.kind == kind) return r;
-        return null;
-    }
-}
-
 public class WallDestructionEffects : MonoBehaviour
 {
     [SerializeField] ParticleSystem smallHitFx;
@@ -52,8 +31,8 @@ public class WallDestructionEffects : MonoBehaviour
         // 2) 파편 스폰
         if (debrisPool && rule != null)
         {
-            if (rule.smallCount > 0) debrisPool.SpawnBurst(e.worldPos, rule.smallCount, rule.smallForce);
-            if (rule.bigCount > 0) debrisPool.SpawnBurst(e.worldPos, rule.bigCount, rule.bigForce);
+            if (rule.smallCount > 0) debrisPool.SpawnSmall(e.worldPos, rule.smallCount, rule.smallForce);
+            if (rule.bigCount > 0) debrisPool.SpawnBig(e.worldPos, rule.bigCount, rule.bigForce);
         }
     }
 
