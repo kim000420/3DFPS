@@ -398,6 +398,7 @@ GameObject:
   - component: {fileID: 1069960484613499420}
   - component: {fileID: 1069960484613499423}
   - component: {fileID: 1069960484613499422}
+  - component: {fileID: -7986574524277423571}
   m_Layer: 0
   m_Name: Pistol_1
   m_TagString: Untagged
@@ -568,6 +569,21 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c20ebd16cf50f4a4fbc082c9957d3b8e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+--- !u!114 &-7986574524277423571
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1069960484613499416}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 12d9be6e39d74854ab47ed7de09b29c4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  kind: 0
+  radiusMultiplier: 0.3
+  bigThreshold: 0.1
 --- !u!1 &1069960484657084129
 GameObject:
   m_ObjectHideFlags: 0
@@ -6460,7 +6476,7 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
 --- !u!95 &1069960483646107544
 Animator:
-  serializedVersion: 4
+  serializedVersion: 5
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
@@ -6477,7 +6493,8 @@ Animator:
   m_WarningMessage: 
   m_HasTransformHierarchy: 1
   m_AllowConstantClipSamplingOptimization: 1
-  m_KeepAnimatorControllerStateOnDisable: 0
+  m_KeepAnimatorStateOnDisable: 0
+  m_WriteDefaultValuesOnDisable: 0
 --- !u!4 &672155756044788619 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 0465b220dc5c8e4409d8f79530b76359,

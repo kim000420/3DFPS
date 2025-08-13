@@ -9,6 +9,11 @@ public class DestructibleWall : MonoBehaviour, IDamageable
     public float baseDestructionRadius = 0.5f; // 기준 반경
     public float health = 100f;
 
+    [Header("Thresholds (Area in 2D projection)")]
+    [SerializeField] private float bigBreachThreshold = 0.30f;   // 작은/큰 파괴 구분
+    [SerializeField] private float bigIslandThreshold = 0.30f;    // 작은/큰 '고립 섬' 구분
+
+
     private MeshFilter meshFilter;
     private MeshCollider meshCollider;
     private Mesh currentMesh; // 수정 가능한 현재 메시
@@ -154,6 +159,89 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         // 3) (선택) 고립 파편 정리 — 큰 구멍 만들수록 효과적
         RemoveFloatingIslands2D(thicknessAxis);
     }
+
+    private float TryClipMeshAt_ReturnArea(Vector3 hitWorldPos, float radius)
+    {
+        // 0) 좌표/축 준비
+        Vector3 hitLocalPos = transform.InverseTransformPoint(hitWorldPos);
+
+        int thicknessAxis = GetThicknessAxis(out Vector3 thicknessDir); // ex) Z가 두께면 thicknessDir=(0,0,1)
+        Vector2 hit2 = ProjectTo2D(hitLocalPos, thicknessAxis);
+
+        var v = currentMesh.vertices;
+        var t = currentMesh.triangles;
+        int triCount = t.Length / 3;
+
+        // 1) 앞면 패턴 수집: (노멀 · 두께축) > 0 인 면들 중 "반경 안" 삼각형의 2D-센트로이드 키
+        HashSet<long> frontPattern = new HashSet<long>();
+
+        for (int tri = 0; tri < triCount; tri++)
+        {
+            int ia = t[tri * 3 + 0], ib = t[tri * 3 + 1], ic = t[tri * 3 + 2];
+            Vector3 v0 = v[ia], v1 = v[ib], v2 = v[ic];
+
+            // 로컬 노멀
+            Vector3 n = Vector3.Cross(v1 - v0, v2 - v0).normalized;
+            bool isFront = Vector3.Dot(n, thicknessDir) > 0f; // 두께축 기준 "앞"
+
+            // 2D 센트로이드
+            Vector3 c3 = (v0 + v1 + v2) / 3f;
+            Vector2 c2 = ProjectTo2D(c3, thicknessAxis);
+
+            if (isFront && Vector2.Distance(c2, hit2) <= radius + radiusEpsilon)
+            {
+                frontPattern.Add(Key2D(c2));
+            }
+        }
+
+        // 2) 일괄 제거: 앞면 패턴과 일치하는 2D-센트로이드 키는 "노멀과 무관하게" 삭제
+        //    (즉, 뒷면도 동일 키면 함께 삭제) + 반경 자체로 걸린 면도 삭제
+        List<int> kept = new List<int>(t.Length);
+        int removed = 0;
+        float removedArea2D = 0f;
+
+        for (int tri = 0; tri < triCount; tri++)
+        {
+            int ia = t[tri * 3 + 0], ib = t[tri * 3 + 1], ic = t[tri * 3 + 2];
+            Vector3 v0 = v[ia], v1 = v[ib], v2 = v[ic];
+            Vector3 c3 = (v0 + v1 + v2) / 3f;
+            Vector2 c2 = ProjectTo2D(c3, thicknessAxis);
+
+            bool inRadius = Vector2.Distance(c2, hit2) <= radius + radiusEpsilon;
+            bool matchFrontKey = frontPattern.Contains(Key2D(c2));
+
+            if (matchFrontKey || inRadius)
+            {
+                // 2D 투영 좌표
+                Vector2 v0_2D = ProjectTo2D(v0, thicknessAxis);
+                Vector2 v1_2D = ProjectTo2D(v1, thicknessAxis);
+                Vector2 v2_2D = ProjectTo2D(v2, thicknessAxis);
+                // 2D 삼각형 면적(절대값 * 0.5) — removedArea2D 누적
+                float triArea = Mathf.Abs((v0_2D.x * (v1_2D.y - v2_2D.y) + v1_2D.x * (v2_2D.y - v0_2D.y) + v2_2D.x * (v0_2D.y - v1_2D.y))) * 0.5f;
+                removedArea2D += triArea;
+                removed++;
+                continue;
+            }
+
+            kept.Add(ia); kept.Add(ib); kept.Add(ic);
+        }
+
+        // 메시/콜라이더 갱신
+        currentMesh.triangles = kept.ToArray();
+        currentMesh.RecalculateNormals();
+        currentMesh.RecalculateBounds();
+        meshCollider.sharedMesh = null; // 콜라이더 갱신
+        meshCollider.sharedMesh = currentMesh;
+
+        Debug.Log($"[DestructibleWall] axis={thicknessAxis}, Removed(front-sync): {removed}, Remain: {kept.Count / 3}");
+
+        // 3) (선택) 고립 파편 정리 — 큰 구멍 만들수록 효과적
+        RemoveFloatingIslands2D(thicknessAxis);
+        
+        return removedArea2D;
+    }
+
+    // 절단 수행 및 잘려나간 2D면적을 반환
     public void RemoveFloatingIslands2D(int thicknessAxis)
     {
         var verts = currentMesh.vertices;
@@ -311,7 +399,7 @@ public class DestructibleWall : MonoBehaviour, IDamageable
             Vector3 worldPos = transform.TransformPoint(centroid3D);
 
             // 섬 제거 이벤트 발행
-            var kind = (islandArea >= 0.3f) ? DestructionKind.BigIsland : DestructionKind.SmallIsland; // 임계치 동일
+            var kind = (islandArea >= bigIslandThreshold) ? DestructionKind.BigIsland : DestructionKind.SmallIsland; // 임계치 동일
             DestructionEventBus.Raise(new DestructionEvent
             {
                 wallId = this.GetInstanceID(),
@@ -337,14 +425,34 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
     }
 
-    private static void ShareVertex(Dictionary<int, List<int>> map, int vIdx, int triIdx)
+    public void DamageAtWithContext(Vector3 hitPoint, float amount, Akila.FPSFramework.Actor damageSource,
+                                float radiusMul, float? bigThresholdOverride = null)
     {
-        if (!map.TryGetValue(vIdx, out var list))
+        // 체력
+        health -= amount;
+
+        // 반경 = (기본반경 * 피해량/MaxHealth) * 무기 보정
+        float baseR = baseDestructionRadius * Mathf.Clamp01(amount / MaxHealth);
+        float radius = baseR * radiusMul;
+
+        // 절단 + 잘린 면적 얻기
+        float removedArea = TryClipMeshAt_ReturnArea(hitPoint, radius);
+
+        // 무기별 임계치로 이벤트 kind 결정
+        float th = bigThresholdOverride ?? bigBreachThreshold;
+        var kind = (removedArea >= bigThresholdOverride) ? DestructionKind.BigBreach : DestructionKind.SmallHit;
+
+        DestructionEventBus.Raise(new DestructionEvent
         {
-            list = new List<int>();
-            map[vIdx] = list;
-        }
-        list.Add(triIdx);
+            wallId = GetInstanceID(),
+            worldPos = hitPoint,
+            worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
+            removedArea = removedArea,
+            isGroupCollapse = false,
+            kind = kind
+        });
+
+        if (health <= 0f && !deadConfirmed) { deadConfirmed = true; }
     }
 
     public int GetThicknessAxis(out Vector3 axisDir)
@@ -482,7 +590,7 @@ public class DestructibleWall : MonoBehaviour, IDamageable
                 worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
                 removedArea = removedArea2D,
                 isGroupCollapse = false,
-                kind = removedArea2D >= 0.3f ? DestructionKind.BigBreach : DestructionKind.SmallHit // 임계치는 이후 튜닝
+                kind = removedArea2D >= bigBreachThreshold ? DestructionKind.BigBreach : DestructionKind.SmallHit // 임계치는 이후 튜닝
             });
 
             Debug.Log($"[DestructibleWall] Boundary tris removed: {removed}");

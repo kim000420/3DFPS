@@ -282,6 +282,15 @@ namespace Akila.FPSFramework
         {
             if (_transform != transform)
             {
+                if (_transform.TryGetComponent(out DestructibleWall wall))
+                {
+                    // 폭심지에서 벽 표면 최근접점을 가져오는 유틸 이미 있음
+                    Vector3 p = wall.GetClosestPointOnSurface(transform.position);
+                    // 폭발은 보통 큰 반경 → radiusMultiplier를 태그나 상수로 1.5~2.0 배 정도
+                    wall.DamageAtWithContext(p, damage, source, radiusMul: 1.6f, bigThresholdOverride: 0.25f);
+                    return;
+                }
+
                 if (_transform.TryGetComponent(out IDamageable damageable))
                 {
                     damageable.Damage(damage, source);

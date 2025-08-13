@@ -159,17 +159,21 @@ namespace Akila.FPSFramework
             if (hit.transform.TryGetComponent(out IgnoreHitDetection ignore)) return;
 
             // 1) 먼저 DestructibleWall 처리 (자식 콜라이더 대비: InParent)
+            
+            // 1-1) 벽 찾기
             var wall = hit.collider.GetComponentInParent<DestructibleWall>();
             if (wall != null)
             {
-                // 총알 대미지와 발사자 전달 (Actor null 허용)
-                wall.DamageAt(hit.point, damage, source != null ? source.Actor : null);
+                // 1-2) 무기 태그 가져오기 (Firearm 프리팹에 붙인 WeaponImpactTag)
+                var tag = source ? source.GetComponent<WeaponImpactTag>() : null;
+                float radiusMul = tag ? tag.radiusMultiplier : 1f;
+                float bigThresh = tag ? tag.bigThreshold : 0.30f;
 
-                // 벽은 얇은 판 구조라 데칼을 굳이 찍지 않는 편이 자연스러움 → OnHit 생략/지연
-                // 관통 강도는 벽 재질에 맞춰 더 크게 깎는 편이 안정적
-                penetrationStrenght -= 15f; // 필요시 튜닝 (기존 10보다 조금 더)
+                // 1-3) 컨텍스트 Damage 호출
+                wall.DamageAtWithContext(hit.point, damage, source ? source.Actor : null, radiusMul, bigThresh);
 
-                // 관통 가능하면 다음 히트 테스트로 진행
+                // 1-4) 관통 강도 조정 및 이후 처리 (기존 유지)
+                penetrationStrenght -= 15f;
                 if (penetrationStrenght > 0)
                 {
                     Firearm.UpdateHits(source, this, defaultDecal, ray, hit, damage, damageRangeFactor, decalDirection);
@@ -178,8 +182,9 @@ namespace Akila.FPSFramework
                 {
                     Destroy(gameObject);
                 }
-                return; // 여기서 마무리 (벽 이외 로직 중복 실행 방지)
+                return;
             }
+
 
             // 2) 폭발탄이면 즉시 처리 (절단이 없을 때만)
             if (explosive)
