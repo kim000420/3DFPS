@@ -167,10 +167,9 @@ namespace Akila.FPSFramework
                 // 1-2) 무기 태그 가져오기 (Firearm 프리팹에 붙인 WeaponImpactTag)
                 var tag = source ? source.GetComponent<WeaponImpactTag>() : null;
                 float radiusMul = tag ? tag.radiusMultiplier : 1f;
-                float bigThresh = tag ? tag.bigThreshold : 0.30f;
 
                 // 1-3) 컨텍스트 Damage 호출
-                wall.DamageAtWithContext(hit.point, damage, source ? source.Actor : null, radiusMul, bigThresh);
+                wall.DamageAtWithContext(hit.point, damage, source ? source.Actor : null, radiusMul);
 
                 // 1-4) 관통 강도 조정 및 이후 처리 (기존 유지)
                 penetrationStrenght -= 15f;

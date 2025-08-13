@@ -505,8 +505,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   kind: 1
-  radiusMultiplier: 0.8
-  bigThreshold: 0.2
+  radiusMultiplier: 0.3
 --- !u!1 &395104231917611166
 GameObject:
   m_ObjectHideFlags: 0

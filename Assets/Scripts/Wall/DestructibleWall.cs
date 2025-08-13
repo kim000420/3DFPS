@@ -10,8 +10,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
     public float health = 100f;
 
     [Header("Thresholds (Area in 2D projection)")]
-    [SerializeField] private float bigBreachThreshold = 0.30f;   // 작은/큰 파괴 구분
-    [SerializeField] private float bigIslandThreshold = 0.30f;    // 작은/큰 '고립 섬' 구분
+    [SerializeField] private float bigBreachThreshold = 3f;// 작은/큰 파괴 구분
+    [SerializeField] private float bigIslandThreshold = 3f;    // 작은/큰 '고립 섬' 구분
 
 
     private MeshFilter meshFilter;
@@ -140,7 +140,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         currentMesh.RecalculateNormals();
         currentMesh.RecalculateBounds();
 
-        var kind = (removedArea2D >= 0.3f) ? DestructionKind.BigBreach : DestructionKind.SmallHit; // 임계치 튜닝 포인트
+
+        var kind = (removedArea2D >= bigBreachThreshold) ? DestructionKind.BigBreach : DestructionKind.SmallHit; // 임계치 튜닝 포인트
         DestructionEventBus.Raise(new DestructionEvent
         {
             wallId = this.GetInstanceID(),
@@ -422,7 +423,6 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
         if (removedIslands > 0)
             Debug.Log($"[DestructibleWall] Floating islands removed: {removedIslands}");
-
     }
 
     public void DamageAtWithContext(Vector3 hitPoint, float amount, Akila.FPSFramework.Actor damageSource,
@@ -440,7 +440,7 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
         // 무기별 임계치로 이벤트 kind 결정
         float th = bigThresholdOverride ?? bigBreachThreshold;
-        var kind = (removedArea >= bigThresholdOverride) ? DestructionKind.BigBreach : DestructionKind.SmallHit;
+        var kind = (removedArea >= th) ? DestructionKind.BigBreach : DestructionKind.SmallHit;
 
         DestructionEventBus.Raise(new DestructionEvent
         {
