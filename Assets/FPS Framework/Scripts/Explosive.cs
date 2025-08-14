@@ -37,6 +37,17 @@ namespace Akila.FPSFramework
         [HideInInspector] public Vector3 explosionEffactOffcet;
         [HideInInspector] public Vector3 explosionEffactRotationOffset;
 
+        [Header("Wall Destruction Tuning")]
+        [SerializeField, Tooltip("폭발 반경을 벽 구멍 반경으로 변환하는 스케일")]
+        private float wallHoleRadiusScale = 0.25f;
+
+        [SerializeField, Tooltip("큰 파괴 판정 임계치를 강제로 덮어쓰기(미사용 시 <0 유지)")]
+        private float wallBigThresholdOverride = 0.25f; // 필요 없으면 -1f 로 설정
+
+        [SerializeField, Tooltip("그룹 체력에 반영할 폭발 대미지 스케일(1=그대로)")]
+        private float wallGroupDamageScale = 1f;
+
+
         [Space]
         [HideInInspector] public float explosionSize = 1;
         [HideInInspector] public float craterSize = 1;
@@ -141,23 +152,27 @@ namespace Akila.FPSFramework
                 var wall = collider.GetComponentInParent<DestructibleWall>();
                 if (wall != null)
                 {
-                    // 1) 최근접점
+                    // 1) 폭심지 기준 벽 표면 최근접점
                     Vector3 closest = wall.GetClosestPointOnSurface(transform.position);
 
                     // 2) 거리 보정 (가까울수록 1)
                     float dist = Vector3.Distance(transform.position, closest);
                     float t = Mathf.InverseLerp(radius * scale, 0f, dist);
 
-                    // 3) 절단 반경/강도 스케일 (간단 맵핑: 필요 시 커브 도입)
-                    float holeRadius = Mathf.Max(0.01f, (radius * 0.25f) * t); // 튜닝 포인트
+                    // 3) 구멍 반경 계산 (폭발 반경 → 벽 파괴 반경)
+                    float holeRadius = Mathf.Max(0.01f, (radius * wallHoleRadiusScale) * t);
+
+                    // 4) 벽 절단 (새 API)
+                    float? bigTh = wallBigThresholdOverride >= 0f ? wallBigThresholdOverride : (float?)null;
+                    wall.ApplyDestructionRadius(closest, holeRadius, bigTh);   // ← 새 구조 (벽은 절단만)
+
+                    // 5) 그룹 체력 반영(체력형 모드일 때만 의미 있음)
                     float dmg = damage * t;
+                    wall.NotifyGroupDamage(dmg * wallGroupDamageScale, closest);
 
-                    // 4) 직접 절단 (A안: 삼각형 제거 기반)
-                    wall.DamageAt(closest, dmg, source);
-
-                    // 이 폭발 항목은 처리 완료 → 다음 콜라이더
                     continue;
                 }
+
 
                 var dir = -(transform.position - collider.transform.position);
 
@@ -284,10 +299,17 @@ namespace Akila.FPSFramework
             {
                 if (_transform.TryGetComponent(out DestructibleWall wall))
                 {
-                    // 폭심지에서 벽 표면 최근접점을 가져오는 유틸 이미 있음
                     Vector3 p = wall.GetClosestPointOnSurface(transform.position);
-                    // 폭발은 보통 큰 반경 → radiusMultiplier를 태그나 상수로 1.5~2.0 배 정도
-                    wall.DamageAtWithContext(p, damage, source, radiusMul: 1.6f, bigThresholdOverride: 0.25f);
+                    float dist = Vector3.Distance(transform.position, p);
+                    float t = Mathf.InverseLerp(radius * scale, 0f, dist);
+
+                    // 폭발 반경 → 벽 구멍 반경
+                    float worldRadius = Mathf.Max(0.01f, (radius * wallHoleRadiusScale) * t);
+
+                    // 절단 + 그룹 체력 반영
+                    float? bigTh = wallBigThresholdOverride >= 0f ? wallBigThresholdOverride : (float?)null;
+                    wall.ApplyDestructionRadius(p, worldRadius, bigTh);
+                    wall.NotifyGroupDamage(damage * t * wallGroupDamageScale, p);
                     return;
                 }
 

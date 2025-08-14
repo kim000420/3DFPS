@@ -73,7 +73,6 @@ namespace Akila.FPSFramework.Examples
             // 인덱스 범위 체크
             if (value < 0 || value >= resolutions.Count)
             {
-                Debug.LogWarning($"[Settings] 잘못된 해상도 인덱스: {value}, 기본값 0 사용");
                 value = 0;
             }
             Resolution resolution = resolutions[value];

@@ -5,18 +5,23 @@ using Akila.FPSFramework;
 [RequireComponent(typeof(MeshFilter), typeof(MeshCollider))]
 public class DestructibleWall : MonoBehaviour, IDamageable
 {
-    [Header("Destruction Settings")]
-    public float baseDestructionRadius = 0.5f; // 기준 반경
-    public float health = 100f;
-
     [Header("Thresholds (Area in 2D projection)")]
     [SerializeField] private float bigBreachThreshold = 3f;// 작은/큰 파괴 구분
     [SerializeField] private float bigIslandThreshold = 3f;    // 작은/큰 '고립 섬' 구분
+
+    // 외곽/섬 판정 튜닝값
+    [SerializeField, Range(0.9f, 1f), Tooltip("외곽 접속성 판정 여유(1에 가까울수록 엄격)")]
+    private float edgeContactFactor = 0.999f;
+
+    [SerializeField, Min(0f), Tooltip("섬 면적 계산 시 무시할 최소 2D 면적")]
+    private float islandAreaEpsilon = 1e-6f;
+
 
 
     private MeshFilter meshFilter;
     private MeshCollider meshCollider;
     private Mesh currentMesh; // 수정 가능한 현재 메시
+    private Renderer _renderer;
 
     public float MaxHealth { get; set; }
     public Vector3 deathForce { get; set; }
@@ -25,6 +30,7 @@ public class DestructibleWall : MonoBehaviour, IDamageable
     [SerializeField] private float patternQuantize = 1e-3f; // XY 패턴 라운딩 단위(메시 크기에 맞게 튜닝)
     [SerializeField] private float radiusEpsilon = 1e-4f;   // 반경 여유(부동소수 오차 보정)
     [SerializeField] private WallGroupController parentGroup;
+
 
     // 메쉬/콜라이더 안전 적용: 삼각형 < 1이면 콜라이더 비활성
     private void ApplyMeshAndColliderSafe(int[] tris)
@@ -46,91 +52,65 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         }
     }
 
+    // 공통 이벤트 발행 유틸
+    private void RaiseDestructionEvent(DestructionKind kind, Vector3 worldPos, float removedArea)
+    {
+        var bounds = _renderer ? _renderer.bounds : new Bounds(transform.position, Vector3.one);
+        DestructionEventBus.Raise(new DestructionEvent
+        {
+            wallId = GetInstanceID(),
+            worldPos = worldPos,
+            worldBoundsAfter = bounds,
+            removedArea = removedArea,
+            isGroupCollapse = false,
+            kind = kind
+        });
+    }
+
+
     private void Awake()
     {
         meshFilter = GetComponent<MeshFilter>();
         meshCollider = GetComponent<MeshCollider>();
+        _renderer = GetComponent<Renderer>();
 
         // 메시 복사 (원본 건드리지 않기)
         currentMesh = Instantiate(meshFilter.mesh);
         meshFilter.mesh = currentMesh;
         meshCollider.sharedMesh = currentMesh;
 
-        MaxHealth = health;
-
         if (!parentGroup) parentGroup = GetComponentInParent<WallGroupController>();
     }
 
-    /// <summary>
-    /// Damage 호출 시 hitPoint와 함께 실행
-    /// </summary>
-    public void Damage(float amount, Actor damageSource)
-    {
-        Debug.LogWarning("[DestructibleWall] Damage() 호출됨 - hitPoint 없음");
-    }
-
-    /// <summary>
-    /// 실제 타격 위치와 함께 데미지 전달
-    /// </summary>
-    public void DamageAt(Vector3 hitPoint, float amount, Actor damageSource)
-    {
-        // 체력 차감
-        health -= amount;
-
-        // 대미지 크기에 따라 반경 조절
-        float radius = baseDestructionRadius * Mathf.Clamp01(amount / MaxHealth);
-
-        Debug.Log($"[DestructibleWall] Hit at {hitPoint}, Damage: {amount}, Radius: {radius}");
-
-        // 절단 실행
-        TryClipMeshAt(hitPoint, radius);
-
-        // 완전 파괴 여부 확인
-        if (health <= 0f && !deadConfirmed)
-        {
-            deadConfirmed = true;
-            Debug.Log("[DestructibleWall] 완전 파괴됨");
-            // 완전 파괴 시 후속 처리 가능
-        }
-    }
-    private void TryClipMeshAt(Vector3 hitWorldPos, float radius)
+    private (int[] keptTris, float removedArea2D, int thicknessAxis)
+    ClipAtCore(Vector3 hitWorldPos, float radius)
     {
         // 0) 좌표/축 준비
         Vector3 hitLocalPos = transform.InverseTransformPoint(hitWorldPos);
-
-        int thicknessAxis = GetThicknessAxis(out Vector3 thicknessDir); // ex) Z가 두께면 thicknessDir=(0,0,1)
+        int thicknessAxis = GetThicknessAxis(out Vector3 thicknessDir);
         Vector2 hit2 = ProjectTo2D(hitLocalPos, thicknessAxis);
 
         var v = currentMesh.vertices;
         var t = currentMesh.triangles;
         int triCount = t.Length / 3;
 
-        // 1) 앞면 패턴 수집: (노멀 · 두께축) > 0 인 면들 중 "반경 안" 삼각형의 2D-센트로이드 키
+        // 1) 앞면 패턴 수집
         HashSet<long> frontPattern = new HashSet<long>();
-
         for (int tri = 0; tri < triCount; tri++)
         {
             int ia = t[tri * 3 + 0], ib = t[tri * 3 + 1], ic = t[tri * 3 + 2];
             Vector3 v0 = v[ia], v1 = v[ib], v2 = v[ic];
-
-            // 로컬 노멀
             Vector3 n = Vector3.Cross(v1 - v0, v2 - v0).normalized;
-            bool isFront = Vector3.Dot(n, thicknessDir) > 0f; // 두께축 기준 "앞"
-
-            // 2D 센트로이드
+            bool isFront = Vector3.Dot(n, thicknessDir) > 0f;
             Vector3 c3 = (v0 + v1 + v2) / 3f;
             Vector2 c2 = ProjectTo2D(c3, thicknessAxis);
 
             if (isFront && Vector2.Distance(c2, hit2) <= radius + radiusEpsilon)
-            {
                 frontPattern.Add(Key2D(c2));
-            }
         }
 
-        // 2) 일괄 제거: 앞면 패턴과 일치하는 2D-센트로이드 키는 "노멀과 무관하게" 삭제
-        //    (즉, 뒷면도 동일 키면 함께 삭제) + 반경 자체로 걸린 면도 삭제
+        // 2) 제거/보존 분기 + 면적 누적
         List<int> kept = new List<int>(t.Length);
-        int removed = 0;
         float removedArea2D = 0f;
 
         for (int tri = 0; tri < triCount; tri++)
@@ -145,115 +125,32 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
             if (matchFrontKey || inRadius)
             {
-                // 2D 투영 좌표
+                // 2D 삼각형 면적 누적
                 Vector2 v0_2D = ProjectTo2D(v0, thicknessAxis);
                 Vector2 v1_2D = ProjectTo2D(v1, thicknessAxis);
                 Vector2 v2_2D = ProjectTo2D(v2, thicknessAxis);
-                // 2D 삼각형 면적(절대값 * 0.5) — removedArea2D 누적
                 float triArea = Mathf.Abs((v0_2D.x * (v1_2D.y - v2_2D.y) + v1_2D.x * (v2_2D.y - v0_2D.y) + v2_2D.x * (v0_2D.y - v1_2D.y))) * 0.5f;
                 removedArea2D += triArea;
-                removed++;
                 continue;
             }
 
             kept.Add(ia); kept.Add(ib); kept.Add(ic);
         }
 
-        var kind = (removedArea2D >= bigBreachThreshold) ? DestructionKind.BigBreach : DestructionKind.SmallHit; // 임계치 튜닝 포인트
-        DestructionEventBus.Raise(new DestructionEvent
-        {
-            wallId = this.GetInstanceID(),
-            worldPos = hitWorldPos,
-            worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
-            removedArea = removedArea2D,
-            isGroupCollapse = false,
-            kind = kind
-        });
-
-        ApplyMeshAndColliderSafe(kept.ToArray());
-
-
-        Debug.Log($"[DestructibleWall] axis={thicknessAxis}, Removed(front-sync): {removed}, Remain: {kept.Count / 3}");
-
-        // 3) (선택) 고립 파편 정리 — 큰 구멍 만들수록 효과적
-        RemoveFloatingIslands2D(thicknessAxis);
+        return (kept.ToArray(), removedArea2D, thicknessAxis);
     }
 
     private float TryClipMeshAt_ReturnArea(Vector3 hitWorldPos, float radius)
     {
-        // 0) 좌표/축 준비
-        Vector3 hitLocalPos = transform.InverseTransformPoint(hitWorldPos);
+        // 코어 호출
+        var (kept, removedArea2D, thicknessAxis) = ClipAtCore(hitWorldPos, radius);
 
-        int thicknessAxis = GetThicknessAxis(out Vector3 thicknessDir); // ex) Z가 두께면 thicknessDir=(0,0,1)
-        Vector2 hit2 = ProjectTo2D(hitLocalPos, thicknessAxis);
+        // 메시/콜라이더 반영
+        ApplyMeshAndColliderSafe(kept);
 
-        var v = currentMesh.vertices;
-        var t = currentMesh.triangles;
-        int triCount = t.Length / 3;
-
-        // 1) 앞면 패턴 수집: (노멀 · 두께축) > 0 인 면들 중 "반경 안" 삼각형의 2D-센트로이드 키
-        HashSet<long> frontPattern = new HashSet<long>();
-
-        for (int tri = 0; tri < triCount; tri++)
-        {
-            int ia = t[tri * 3 + 0], ib = t[tri * 3 + 1], ic = t[tri * 3 + 2];
-            Vector3 v0 = v[ia], v1 = v[ib], v2 = v[ic];
-
-            // 로컬 노멀
-            Vector3 n = Vector3.Cross(v1 - v0, v2 - v0).normalized;
-            bool isFront = Vector3.Dot(n, thicknessDir) > 0f; // 두께축 기준 "앞"
-
-            // 2D 센트로이드
-            Vector3 c3 = (v0 + v1 + v2) / 3f;
-            Vector2 c2 = ProjectTo2D(c3, thicknessAxis);
-
-            if (isFront && Vector2.Distance(c2, hit2) <= radius + radiusEpsilon)
-            {
-                frontPattern.Add(Key2D(c2));
-            }
-        }
-
-        // 2) 일괄 제거: 앞면 패턴과 일치하는 2D-센트로이드 키는 "노멀과 무관하게" 삭제
-        //    (즉, 뒷면도 동일 키면 함께 삭제) + 반경 자체로 걸린 면도 삭제
-        List<int> kept = new List<int>(t.Length);
-        int removed = 0;
-        float removedArea2D = 0f;
-
-        for (int tri = 0; tri < triCount; tri++)
-        {
-            int ia = t[tri * 3 + 0], ib = t[tri * 3 + 1], ic = t[tri * 3 + 2];
-            Vector3 v0 = v[ia], v1 = v[ib], v2 = v[ic];
-            Vector3 c3 = (v0 + v1 + v2) / 3f;
-            Vector2 c2 = ProjectTo2D(c3, thicknessAxis);
-
-            bool inRadius = Vector2.Distance(c2, hit2) <= radius + radiusEpsilon;
-            bool matchFrontKey = frontPattern.Contains(Key2D(c2));
-
-            if (matchFrontKey || inRadius)
-            {
-                // 2D 투영 좌표
-                Vector2 v0_2D = ProjectTo2D(v0, thicknessAxis);
-                Vector2 v1_2D = ProjectTo2D(v1, thicknessAxis);
-                Vector2 v2_2D = ProjectTo2D(v2, thicknessAxis);
-                // 2D 삼각형 면적(절대값 * 0.5) — removedArea2D 누적
-                float triArea = Mathf.Abs((v0_2D.x * (v1_2D.y - v2_2D.y) + v1_2D.x * (v2_2D.y - v0_2D.y) + v2_2D.x * (v0_2D.y - v1_2D.y))) * 0.5f;
-                removedArea2D += triArea;
-                removed++;
-                continue;
-            }
-
-            kept.Add(ia); kept.Add(ib); kept.Add(ic);
-        }
-
-        // 메시/콜라이더 갱신
-        ApplyMeshAndColliderSafe(kept.ToArray());
-
-
-        Debug.Log($"[DestructibleWall] axis={thicknessAxis}, Removed(front-sync): {removed}, Remain: {kept.Count / 3}");
-
-        // 3) (선택) 고립 파편 정리 — 큰 구멍 만들수록 효과적
+        // 고립 섬 정리
         RemoveFloatingIslands2D(thicknessAxis);
-        
+
         return removedArea2D;
     }
 
@@ -326,7 +223,7 @@ public class DestructibleWall : MonoBehaviour, IDamageable
             cx = bounds.center.x; cy = bounds.center.y;
         }
 
-        float mx = ex * 0.999f, my = ey * 0.999f;
+        float mx = ex * edgeContactFactor, my = ey * edgeContactFactor;
         bool[] visited = new bool[triCount];
         System.Collections.Generic.Queue<int> q = new System.Collections.Generic.Queue<int>();
 
@@ -402,7 +299,7 @@ public class DestructibleWall : MonoBehaviour, IDamageable
                 Vector2 triCentroid = (a2 + b2 + c2) / 3f;
                 centroidSum += triCentroid * triArea;
             }
-            Vector2 islandCentroid2D = islandArea > 1e-6f ? centroidSum / islandArea : Vector2.zero;
+            Vector2 islandCentroid2D = islandArea > islandAreaEpsilon ? centroidSum / islandArea : Vector2.zero;
 
             // 2D→3D 변환(두께 중앙면으로 맵)
             Vector3 centroid3D;
@@ -416,55 +313,20 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
             // 섬 제거 이벤트 발행
             var kind = (islandArea >= bigIslandThreshold) ? DestructionKind.BigIsland : DestructionKind.SmallIsland; // 임계치 동일
-            DestructionEventBus.Raise(new DestructionEvent
-            {
-                wallId = this.GetInstanceID(),
-                worldPos = worldPos,
-                worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
-                removedArea = islandArea,
-                isGroupCollapse = false,
-                kind = kind
-            });
+            RaiseDestructionEvent(kind, worldPos, islandArea);
+
 
             removedIslands += island.Count;
         }
 
         // 변경된 삼각형 적용
         ApplyMeshAndColliderSafe(kept.ToArray());
-
-
-        if (removedIslands > 0)
-            Debug.Log($"[DestructibleWall] Floating islands removed: {removedIslands}");
     }
 
     public void DamageAtWithContext(Vector3 hitPoint, float amount, Akila.FPSFramework.Actor damageSource,
                                 float radiusMul, float? bigThresholdOverride = null)
     {
-        // 체력
-        health -= amount;
-
-        // 반경 = (기본반경 * 피해량/MaxHealth) * 무기 보정
-        float baseR = baseDestructionRadius * Mathf.Clamp01(amount / MaxHealth);
-        float radius = baseR * radiusMul;
-
-        // 절단 + 잘린 면적 얻기
-        float removedArea = TryClipMeshAt_ReturnArea(hitPoint, radius);
-
-        // 무기별 임계치로 이벤트 kind 결정
-        float th = bigThresholdOverride ?? bigBreachThreshold;
-        var kind = (removedArea >= th) ? DestructionKind.BigBreach : DestructionKind.SmallHit;
-
-        DestructionEventBus.Raise(new DestructionEvent
-        {
-            wallId = GetInstanceID(),
-            worldPos = hitPoint,
-            worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
-            removedArea = removedArea,
-            isGroupCollapse = false,
-            kind = kind
-        });
-
-        if (health <= 0f && !deadConfirmed) { deadConfirmed = true; }
+        Debug.LogWarning("[DestructibleWall] DamageAtWithContext is obsolete. Shooter must call ApplyDestructionRadius.");
     }
 
     /// <summary>
@@ -481,15 +343,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         var kind = (removedArea >= th) ? DestructionKind.BigBreach : DestructionKind.SmallHit;
 
         // 3) 결과 이벤트만 브로드캐스트 (체력/데미지 관여 X)
-        DestructionEventBus.Raise(new DestructionEvent
-        {
-            wallId = GetInstanceID(),
-            worldPos = hitPoint,
-            worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
-            removedArea = removedArea,
-            isGroupCollapse = false,
-            kind = kind
-        });
+        RaiseDestructionEvent(kind, hitPoint, removedArea);
+
 
         return removedArea;
     }
@@ -620,17 +475,11 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
 
             // 경계제거 자체도 작은/큰 파괴로 간주해 이벤트 발행 (보통은 큰 연출과 함께)
-            DestructionEventBus.Raise(new DestructionEvent
-            {
-                wallId = GetInstanceID(),
-                worldPos = transform.TransformPoint(currentMesh.bounds.center),
-                worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
-                removedArea = removedArea2D,
-                isGroupCollapse = false,
-                kind = removedArea2D >= bigBreachThreshold ? DestructionKind.BigBreach : DestructionKind.SmallHit // 임계치는 이후 튜닝
-            });
-
-            Debug.Log($"[DestructibleWall] Boundary tris removed: {removed}");
+            RaiseDestructionEvent(
+                removedArea2D >= bigBreachThreshold ? DestructionKind.BigBreach : DestructionKind.SmallHit,
+                transform.TransformPoint(currentMesh.bounds.center),
+                removedArea2D
+            );
         }
     }
 
@@ -641,9 +490,32 @@ public class DestructibleWall : MonoBehaviour, IDamageable
     }
 
     // IDamageable 필수 구현
+    public void Damage(float amount, Actor damageSource)
+    {
+        Debug.LogWarning("[DestructibleWall] Damage() 호출됨 - hitPoint 없음");
+    }
+    public void DamageAt(Vector3 hitPoint, float amount, Actor damageSource)
+    {
+        Debug.LogWarning("[DestructibleWall] DamageAt is obsolete. Shooter must call ApplyDestructionRadius.");
+    }
     public Actor GetActor() => null;
-    public float GetHealth() => health;
-    public bool IsDead() => health <= 0f;
+    public float GetHealth()
+    {
+        // 그룹이 체력형이면 그룹 체력(절대값) 환산, 아니면 '사실상 무적' 의미로 +무한대
+        if (parentGroup && parentGroup.mode == WallGroupMode.HealthBased)
+            return parentGroup.Health01 * parentGroup.maxHealth;
+        return float.PositiveInfinity;
+    }
+    public bool IsDead()
+    {
+        // 체력형: 그룹 체력 0이면 사망
+        if (parentGroup && parentGroup.mode == WallGroupMode.HealthBased)
+            return parentGroup.Health01 <= 0f;
+
+        // 무적형: 메시가 완전히 비었으면(절단으로) 사실상 사망 처리
+        var tris = currentMesh ? currentMesh.triangles : null;
+        return tris == null || tris.Length < 3;
+    }
     public int GetGroupsCount() => 0;
     public Ragdoll GetRagdoll() => null;
 }
