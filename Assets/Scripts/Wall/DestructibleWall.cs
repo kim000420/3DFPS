@@ -24,6 +24,27 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
     [SerializeField] private float patternQuantize = 1e-3f; // XY 패턴 라운딩 단위(메시 크기에 맞게 튜닝)
     [SerializeField] private float radiusEpsilon = 1e-4f;   // 반경 여유(부동소수 오차 보정)
+    [SerializeField] private WallGroupController parentGroup;
+
+    // 메쉬/콜라이더 안전 적용: 삼각형 < 1이면 콜라이더 비활성
+    private void ApplyMeshAndColliderSafe(int[] tris)
+    {
+        currentMesh.triangles = tris;
+        currentMesh.RecalculateNormals();
+        currentMesh.RecalculateBounds();
+
+        if (tris != null && tris.Length >= 3)
+        {
+            if (!meshCollider.enabled) meshCollider.enabled = true;
+            meshCollider.sharedMesh = null;
+            meshCollider.sharedMesh = currentMesh; // OK: 유효한(>=1 tri) 메쉬만 바인딩
+        }
+        else
+        {
+            meshCollider.sharedMesh = null;
+            if (meshCollider.enabled) meshCollider.enabled = false;  // 충돌체 완전히 비활성
+        }
+    }
 
     private void Awake()
     {
@@ -36,6 +57,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         meshCollider.sharedMesh = currentMesh;
 
         MaxHealth = health;
+
+        if (!parentGroup) parentGroup = GetComponentInParent<WallGroupController>();
     }
 
     /// <summary>
@@ -136,11 +159,6 @@ public class DestructibleWall : MonoBehaviour, IDamageable
             kept.Add(ia); kept.Add(ib); kept.Add(ic);
         }
 
-        currentMesh.triangles = kept.ToArray();
-        currentMesh.RecalculateNormals();
-        currentMesh.RecalculateBounds();
-
-
         var kind = (removedArea2D >= bigBreachThreshold) ? DestructionKind.BigBreach : DestructionKind.SmallHit; // 임계치 튜닝 포인트
         DestructionEventBus.Raise(new DestructionEvent
         {
@@ -152,8 +170,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
             kind = kind
         });
 
-        meshCollider.sharedMesh = null; // 콜라이더 갱신
-        meshCollider.sharedMesh = currentMesh;
+        ApplyMeshAndColliderSafe(kept.ToArray());
+
 
         Debug.Log($"[DestructibleWall] axis={thicknessAxis}, Removed(front-sync): {removed}, Remain: {kept.Count / 3}");
 
@@ -228,11 +246,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         }
 
         // 메시/콜라이더 갱신
-        currentMesh.triangles = kept.ToArray();
-        currentMesh.RecalculateNormals();
-        currentMesh.RecalculateBounds();
-        meshCollider.sharedMesh = null; // 콜라이더 갱신
-        meshCollider.sharedMesh = currentMesh;
+        ApplyMeshAndColliderSafe(kept.ToArray());
+
 
         Debug.Log($"[DestructibleWall] axis={thicknessAxis}, Removed(front-sync): {removed}, Remain: {kept.Count / 3}");
 
@@ -415,11 +430,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
         }
 
         // 변경된 삼각형 적용
-        currentMesh.triangles = kept.ToArray();
-        currentMesh.RecalculateNormals();
-        currentMesh.RecalculateBounds();
-        meshCollider.sharedMesh = null;
-        meshCollider.sharedMesh = currentMesh;
+        ApplyMeshAndColliderSafe(kept.ToArray());
+
 
         if (removedIslands > 0)
             Debug.Log($"[DestructibleWall] Floating islands removed: {removedIslands}");
@@ -454,6 +466,34 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
         if (health <= 0f && !deadConfirmed) { deadConfirmed = true; }
     }
+
+    /// <summary>
+    /// 발사 측에서 ‘절대 반지름’을 결정해 넘기는, 절단 전용 엔트리
+    /// 벽은 순수하게 메시를 자르고, 결과 면적을 반환하며, 이벤트만 발행
+    /// </summary>
+    public float ApplyDestructionRadius(Vector3 hitPoint, float worldRadius, float? bigThresholdOverride = null)
+    {
+        // 1) 메시 절단 (면적 계산 포함)
+        float removedArea = TryClipMeshAt_ReturnArea(hitPoint, worldRadius);
+
+        // 2) 파괴 규모 분류(임계치 외부에서 덮어쓰기 가능)
+        float th = bigThresholdOverride ?? bigBreachThreshold;
+        var kind = (removedArea >= th) ? DestructionKind.BigBreach : DestructionKind.SmallHit;
+
+        // 3) 결과 이벤트만 브로드캐스트 (체력/데미지 관여 X)
+        DestructionEventBus.Raise(new DestructionEvent
+        {
+            wallId = GetInstanceID(),
+            worldPos = hitPoint,
+            worldBoundsAfter = GetComponent<Renderer>() ? GetComponent<Renderer>().bounds : new Bounds(transform.position, Vector3.one),
+            removedArea = removedArea,
+            isGroupCollapse = false,
+            kind = kind
+        });
+
+        return removedArea;
+    }
+
 
     public int GetThicknessAxis(out Vector3 axisDir)
     {
@@ -576,11 +616,8 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
         if (removed > 0)
         {
-            currentMesh.triangles = kept.ToArray();
-            currentMesh.RecalculateNormals();
-            currentMesh.RecalculateBounds();
-            meshCollider.sharedMesh = null; // 콜라이더 갱신
-            meshCollider.sharedMesh = currentMesh;
+            ApplyMeshAndColliderSafe(kept.ToArray());
+
 
             // 경계제거 자체도 작은/큰 파괴로 간주해 이벤트 발행 (보통은 큰 연출과 함께)
             DestructionEventBus.Raise(new DestructionEvent
@@ -595,6 +632,12 @@ public class DestructibleWall : MonoBehaviour, IDamageable
 
             Debug.Log($"[DestructibleWall] Boundary tris removed: {removed}");
         }
+    }
+
+    // 그룹 데미지 통보용 래퍼
+    public void NotifyGroupDamage(float amount, Vector3 hitPoint)
+    {
+        if (parentGroup) parentGroup.ApplyGroupDamage(amount, hitPoint);
     }
 
     // IDamageable 필수 구현

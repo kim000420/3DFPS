@@ -166,10 +166,15 @@ namespace Akila.FPSFramework
             {
                 // 1-2) 무기 태그 가져오기 (Firearm 프리팹에 붙인 WeaponImpactTag)
                 var tag = source ? source.GetComponent<WeaponImpactTag>() : null;
-                float radiusMul = tag ? tag.radiusMultiplier : 1f;
+                float damageNorm = Mathf.InverseLerp(0f, source.preset.damage, damage); // 0~1
+                float baseRadiusWeapon = tag ? tag.baseRadius : 0.5f;
+                float worldRadius = baseRadiusWeapon * Mathf.Clamp01(damageNorm) * (tag ? tag.radiusMultiplier : 1f);
 
                 // 1-3) 컨텍스트 Damage 호출
-                wall.DamageAtWithContext(hit.point, damage, source ? source.Actor : null, radiusMul);
+                wall.ApplyDestructionRadius(hit.point, worldRadius, null);
+
+                // (추가) 그룹 체력형이라면 데미지 반영
+                wall.NotifyGroupDamage(damage, hit.point);
 
                 // 1-4) 관통 강도 조정 및 이후 처리 (기존 유지)
                 penetrationStrenght -= 15f;
