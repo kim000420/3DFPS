@@ -17,16 +17,20 @@ public class WallDestructionEffects : MonoBehaviour
         var rule = ruleset ? ruleset.Find(e.kind) : null;
 
         // 1) FX 선택
-        if (e.kind == DestructionKind.GroupCollapse || e.kind == DestructionKind.BigBreach || e.kind == DestructionKind.BigIsland)
+        switch (e.kind)
         {
-            Spawn(bigBreachFx, e.worldPos);
+            case DestructionKind.GroupCollapse:
+            case DestructionKind.BigBreach:
+            case DestructionKind.BigIsland:
+                Spawn(bigBreachFx, e.worldPos); // 큰 FX 1회
+                break;
+
+            case DestructionKind.SmallHit:
+            case DestructionKind.SmallIsland:
+                Spawn(smallHitFx, e.worldPos);  // 작은 FX 1회
+                break;
         }
-        else if (e.kind == DestructionKind.SmallHit || e.kind == DestructionKind.SmallIsland)
-        {
-            // Hit/Breach류는 removedArea 기준으로도 분기 가능 (rule?.fxAreaThreshold 사용)
-            bool bigByArea = rule != null && e.removedArea >= rule.fxAreaThreshold;
-            Spawn(bigByArea ? bigBreachFx : smallHitFx, e.worldPos);
-        }
+
 
         // 2) 파편 스폰
         if (debrisPool && rule != null)
