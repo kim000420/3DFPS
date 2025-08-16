@@ -505,6 +505,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   kind: 1
+  baseRadius: 0.4
   radiusMultiplier: 0.3
 --- !u!1 &395104231917611166
 GameObject:

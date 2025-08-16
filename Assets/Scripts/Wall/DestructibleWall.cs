@@ -6,8 +6,8 @@ using Akila.FPSFramework;
 public class DestructibleWall : MonoBehaviour, IDamageable
 {
     [Header("Thresholds (Area in 2D projection)")]
-    [SerializeField] private float bigBreachThreshold = 3f;// 작은/큰 파괴 구분
-    [SerializeField] private float bigIslandThreshold = 3f;    // 작은/큰 '고립 섬' 구분
+    [SerializeField] private float bigBreachThreshold = 0.25f;// 작은/큰 파괴 구분
+    [SerializeField] private float bigIslandThreshold = 0.25f;    // 작은/큰 '고립 섬' 구분
 
     // 외곽/섬 판정 튜닝값
     [SerializeField, Range(0.9f, 1f), Tooltip("외곽 접속성 판정 여유(1에 가까울수록 엄격)")]
