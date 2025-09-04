@@ -66,8 +66,8 @@ public class WallGroupController : MonoBehaviour
         foreach (var wall in walls)
         {
             if (!wall) continue;
-            wall.DestroyBoundaryConnectedTriangles();             // 경계부 제거
-            wall.RemoveFloatingIslands2D(wall.GetThicknessAxis(out _)); // 섬 제거 + 섬 이벤트 (public로 변경됨)
+            wall.RemoveBoundaryTriangles();             // 경계부 제거
+            wall.CleanupFloatingIslands(wall.GetThicknessAxis(out _)); // 섬 제거 + 섬 이벤트 (public로 변경됨)
         }
 
         // 3) 더 이상 남은 메시가 없으면 오브젝트 파괴
